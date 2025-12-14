@@ -1,79 +1,142 @@
-// src/controllers/draftController.js
-import {pool} from "../config/db.js";
+import asyncWrapper from "../middelware/asyncwraper.js";
+import * as DraftData from "../data/draftData.js"; 
+// سنحتاج هذه الدوال المساعدة لإتمام عملية الإرسال (بدلاً من إعادة كتابتها)
+import * as TransData from "../data/transactionData.js"; 
+import httpStatusText from "../utils/httpStatusText.js";
+import appError from "../utils/appError.js";
+import { pool } from "../config/db.js"; 
 
-export const getDrafts = async (req, res) => {
-    const userId = req.user.id;
-    const q = `SELECT id, content, attachments, created_at FROM drafts WHERE user_id = $1 ORDER BY created_at DESC`;
-    const result = await pool.query(q, [userId]);
-    res.json(result.rows);
-};
+// 1. عرض صفحة المسودات
+export const getMyDrafts = asyncWrapper(async (req, res, next) => {
+    const userId = req.userId;
+    const drafts = await DraftData.getDraftsByUserId(userId);
+    
+    res.status(200).json({ 
+        status: httpStatusText.SUCCESS, 
+        data: drafts 
+    });
+});
 
-export const getDraftById = async (req, res) => {
-    const userId = req.user.id;
-    const { id } = req.params;
-    const q = `SELECT id, content, attachments, created_at FROM drafts WHERE id = $1 AND user_id = $2`;
-    const result = await pool.query(q, [id, userId]);
-    if (result.rows.length === 0) return res.status(404).json({ error: "Draft not found" });
-    res.json(result.rows[0]);
-};
-
-export const createDraft = async (req, res) => {
-    const userId = req.user.id;
-    const { content, attachments } = req.body;
-    if (!content) return res.status(400).json({ error: "Content required" });
-
-    const q = `INSERT INTO drafts (user_id, content, attachments, created_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING id`;
-    const result = await pool.query(q, [userId, content, attachments || null]);
-    res.status(201).json({ message: "Draft created", draftId: result.rows[0].id });
-};
-
-export const deleteDraft = async (req, res) => {
-    const userId = req.user.id;
-    const { id } = req.params;
-    const q = `DELETE FROM drafts WHERE id = $1 AND user_id = $2 RETURNING id`;
-    const result = await pool.query(q, [id, userId]);
-    if (result.rowCount === 0) return res.status(404).json({ error: "Draft not found" });
-    res.json({ message: "Draft deleted" });
-};
-
-export const sendDraft = async (req, res) => {
-    const userId = req.user.id;
+// 2. حذف مسودة
+export const deleteDraft = asyncWrapper(async (req, res, next) => {
+    const userId = req.userId;
     const { id } = req.params;
 
-    // 1) get draft
-    const draftRes = await pool.query(`SELECT * FROM drafts WHERE id = $1 AND user_id = $2`, [id, userId]);
-    if (draftRes.rows.length === 0) return res.status(404).json({ error: "Draft not found" });
-    const draft = draftRes.rows[0];
+    const isDeleted = await DraftData.deleteDraftById(id, userId);
 
-    // 2) draft.content might be JSON (transaction data) or plain text
-    let transactionData = {};
-    try { transactionData = JSON.parse(draft.content); } catch (e) { transactionData = { content: draft.content, attachments: draft.attachments }; }
+    if (!isDeleted) {
+        return next(appError.create("المسودة غير موجودة أو تم حذفها مسبقاً", 404, httpStatusText.FAIL));
+    }
+    
+    res.status(200).json({ 
+        status: httpStatusText.SUCCESS, 
+        message: "تم حذف المسودة بنجاح"
+    });
+});
 
-    const receiver_id = transactionData.receiver_id || req.body.receiver_id;
-    const type = transactionData.type || req.body.type || "normal";
-    const content = transactionData.content || req.body.content || "";
-    const attachments = transactionData.attachments || draft.attachments || null;
+// 3. تعديل مسودة (أو إرسالها نهائياً)
+export const updateAndPublishDraft = asyncWrapper(async (req, res, next) => {
+    const { id } = req.params; // Draft ID
+    const userId = req.userId;
+    const { 
+        type_id, subject, content, is_draft, receivers, parent_transaction_id 
+    } = req.body;
+    
+    const files = req.files;
+    const io = req.app.get('io');
 
-    // Validate simple
-    if (!receiver_id) return res.status(400).json({ error: "receiver_id required to send draft" });
-    if (!["normal", "iqrar"].includes(type)) return res.status(400).json({ error: "Invalid type" });
+    // أ) التحقق من وجود المسودة وصلاحية المستخدم
+    const existingDraft = await DraftData.getDraftByIdAndUser(id, userId);
+    if (!existingDraft) {
+        return next(appError.create("المسودة غير موجودة أو لا تملك صلاحية تعديلها", 404, httpStatusText.FAIL));
+    }
 
-    // 3) create transaction
-    const insertTx = `
-    INSERT INTO transactions (sender_id, receiver_id, type, content, attachments, created_at)
-    VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP) RETURNING id
-  `;
-    const txRes = await pool.query(insertTx, [userId, receiver_id, type, content, attachments]);
-    const transactionId = txRes.rows[0].id;
+    // ب) تجهيز المتغيرات
+    const isDraftBool = (is_draft === true || is_draft === 'true');
+    // تحديد الحالة: هل ستبقى مسودة أم ستصبح معاملة جديدة/رد
+    let currentStateStr = 'مسودة';
+    if (!isDraftBool) {
+        // إذا قرر المستخدم الإرسال، نحدد الحالة بناءً على وجود معاملة أصلية
+        currentStateStr = (parent_transaction_id) ? 'رد او استدراك' : 'معاملة جديدة';
+    }
 
-    // 4) notifications - simple insert
-    const notifQ = `INSERT INTO notifications (user_id, title, message, transaction_id, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`;
-    const title = type === "iqrar" ? "إقرار جديد" : "معاملة جديدة";
-    const message = type === "iqrar" ? "لديك إقرار جديد" : "لديك معاملة جديدة";
-    await pool.query(notifQ, [receiver_id, title, message, transactionId]);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-    // 5) delete draft
-    await pool.query(`DELETE FROM drafts WHERE id = $1`, [id]);
+        // 1. تحديث بيانات المعاملة في الجدول
+        await DraftData.updateDraftDetails(client, id, {
+            subject,
+            content,
+            type_id,
+            is_draft: isDraftBool,
+            current_status: currentStateStr,
+            parent_id: parent_transaction_id || null
+        });
 
-    res.json({ message: "Draft sent as transaction", transactionId });
-};
+        // 2. إضافة مرفقات جديدة (إن وجدت)
+        if (files && files.length > 0) {
+            for (let i = 0; i < files.length; i++) {
+                const desc = req.body.descriptions ? req.body.descriptions[i] : files[i].originalname;
+                await TransData.insertAttachment(client, {
+                    path: files[i].filename,
+                    originalname: files[i].originalname,
+                    description: desc,
+                    transaction_id: id
+                });
+            }
+        }
+
+        // =========================================================
+        // 3. منطق الإرسال (فقط لو is_draft = false)
+        // نفس المنطق الموجود في createTransaction بالضبط
+        // =========================================================
+        if (!isDraftBool) {
+            // جلب قسم المرسل لعمل المسار
+            const SenderUserDepData = await TransData.getUserDepartmentId(userId);
+            if (!SenderUserDepData) throw new Error("المستخدم غير مسجل في قسم");
+            
+            const SenderUserDepId = SenderUserDepData.department_id;
+            const receiversArray = receivers ? [].concat(receivers) : [];
+            const notificationMsg = `لديك معاملة جديدة بعنوان: ${subject}`;
+
+            for (const receiverId of receiversArray) {
+                // إضافة المستلم
+                await TransData.insertReceiver(client, id, receiverId);
+
+                // إضافة المسار
+                const ReceiverUserDepData = await TransData.getUserDepartmentId(receiverId);
+                if (ReceiverUserDepData) {
+                    await TransData.insertTransactionPath(client, {
+                        transId: id,
+                        fromDeptId: SenderUserDepId,
+                        toDeptId: ReceiverUserDepData.department_id,
+                        notes: 'وارد جديد (من مسودة)'
+                    });
+                }
+
+                // إشعار وسوكيت
+                await TransData.createAndEmitNotification(client, {
+                    userId: receiverId,
+                    transId: id,
+                    content: notificationMsg,
+                    senderId: userId
+                }, io);
+            }
+        }
+
+        await client.query('COMMIT');
+
+        res.status(200).json({
+            status: httpStatusText.SUCCESS,
+            message: isDraftBool ? "تم حفظ التعديلات في المسودة" : "تم إرسال المعاملة بنجاح",
+            data: { transaction_id: id }
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        return next(error);
+    } finally {
+        client.release();
+    }
+});

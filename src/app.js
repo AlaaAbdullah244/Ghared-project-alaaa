@@ -6,12 +6,14 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 
 // Routes
-import transactionRoutes from "./routes/transactionRoutes.js";
 import userRoutes from "./routes/userRouter.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import AdminRoutes from "./routes/AdminRoutes.js";
-import draftRoutes from "./routes/draftsRoutes.js"
 import outgoingTransactionRoutes from "./routes/OutgoingTransactionsRoutes.js"; 
+import transactionRoutes from "./routes/transactionRouter.js"; // 👈 ضيفي ده
+import draftRouter from './routes/draftRouter.js';
+import organizationRouter from './routes/OrganizationRoutes.js';
+
 
 // Utils & Middlewares
 import httpStatusText from "./utils/httpStatusText.js";
@@ -29,15 +31,17 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ✅ 2. Static files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads/Images', express.static(path.join(__dirname, 'uploads')));
 
 // ✅ 3. Routes
 app.use("/api/users", userRoutes);
 app.use("/api/notifications", notificationRoutes); 
 app.use("/api/Admin", AdminRoutes);
-app.use("/api/transaction", transactionRoutes);
-app.use("/api/draft", draftRoutes);
 app.use("/api/outgoingtransactions", outgoingTransactionRoutes);
+
+app.use("/api/transactions", transactionRoutes); // 👈 ضيفي ده
+app.use('/api/org', organizationRouter);
+app.use('/api/drafts', draftRouter);
 
 
 app.get("/", (req, res) => {

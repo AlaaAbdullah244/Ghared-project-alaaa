@@ -1,6 +1,5 @@
 import asyncWrapper from "../middelware/asyncwraper.js";
 import * as Admin from "../data/AdminData.js";
-import * as User from "../data/userData.js";
 import httpStatusText from "../utils/httpStatusText.js";
 import appError from "../utils/appError.js";
 import { generateJWT } from "../utils/genrateToken.js";

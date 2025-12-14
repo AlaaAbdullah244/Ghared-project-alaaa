@@ -132,17 +132,53 @@ export const getSystemUserById = async (userId) => {
 
 
 export const deleteSystemUser = async (userId) => {
-  // 1️⃣ امسح "عضوية" اليوزر ده (عشان الرابط يتفك)
-  // ده بيمسح الصف من جدول User_Membership بس، مش بيمسح القسم نفسه
-  await pool.query(`DELETE FROM "User_Membership" WHERE user_id = $1`, [userId]);
+  // بنستخدم client عشان نقدر نتحكم في الـ Transaction (BEGIN, COMMIT, ROLLBACK)
+  const client = await pool.connect();
 
-  // 2️⃣ امسح "اليوزر" نفسه بقى من جدول User
-  const query = `DELETE FROM "User" WHERE user_id = $1 RETURNING user_id`;
-  const result = await pool.query(query, [userId]);
-  
-  return result.rows[0];
+  try {
+    // 1️⃣ ابدأ المعاملة
+    await client.query('BEGIN');
+
+    // 2️⃣ حذف البيانات الشخصية المباشرة (اللي ملهاش تأثير على سير العمل العام)
+    
+    // مسح العضويات [cite: 37, 161]
+    await client.query(`DELETE FROM "User_Membership" WHERE user_id = $1`, [userId]);
+
+    // مسح الإشعارات الخاصة باليوزر [cite: 59, 187]
+    await client.query(`DELETE FROM "Notification" WHERE user_id = $1`, [userId]);
+
+    // مسح الرسائل اللي "استقبلها" اليوزر في صندوق الوارد (Receiver) [cite: 98, 206]
+    await client.query(`DELETE FROM "Transaction_Receiver" WHERE receiver_user_id = $1`, [userId]);
+
+    // 3️⃣ التعامل مع البيانات التاريخية (Transactions & Actions)
+    // ⚠️ ملحوظة مهمة: لو مسحت الرسائل اللي اليوزر "بعتها"، هتختفي من عند المستقبلين كمان وده ممكن يبوظ تاريخ الشغل.
+    // الأفضل هنا نخلي قيمة الـ ID بـ NULL (Set Null) عشان نحافظ على الرسالة بس نعرف إن صاحبها اتمسح.
+    
+    // فك ارتباط الرسائل اللي هو "راسلها" [cite: 51, 173]
+    await client.query(`UPDATE "Transaction" SET sender_user_id = NULL WHERE sender_user_id = $1`, [userId]);
+
+    // فك ارتباط الإجراءات اللي هو قام بيها (Actions) [cite: 128, 236]
+    await client.query(`UPDATE "Action" SET performer_user_id = NULL WHERE performer_user_id = $1`, [userId]);
+
+
+    // 4️⃣ وأخيراً، امسح اليوزر نفسه من جدول User [cite: 28, 158]
+    const query = `DELETE FROM "User" WHERE user_id = $1 RETURNING *`;
+    const result = await client.query(query, [userId]);
+
+    // 5️⃣ اعتمد التغييرات
+    await client.query('COMMIT');
+    
+    return result.rows[0];
+
+  } catch (error) {
+    // لو حصل أي خطأ، رجع الداتا بيز زي ما كانت
+    await client.query('ROLLBACK');
+    throw error; // ارمي الخطأ عشان الـ Controller يشوفه
+  } finally {
+    // لازم تقفل الاتصال بالـ client
+    client.release();
+  }
 };
-
 
 export const updateSystemUser = async (userId, full_name, email, mobile_number, role_id, department_id) => {
   const query = `
@@ -153,7 +189,6 @@ export const updateSystemUser = async (userId, full_name, email, mobile_number, 
         full_name = COALESCE($2, full_name),
         email = COALESCE($3, email),
         mobile_number = COALESCE($4, mobile_number)
-        -- ❌ تم حذف تحديث الباسورد من هنا تماماً
       WHERE user_id = $1
       RETURNING user_id
     ),
@@ -252,7 +287,6 @@ export const getAllData = async()=>{
  SELECT 
     d.department_id,
     d.department_name,
-    d.department_type,
     c.college_id,
     c.college_name,
     r.role_id,

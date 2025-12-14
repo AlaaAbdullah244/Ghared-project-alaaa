@@ -15,7 +15,7 @@ import appError from "../utils/appError.js";
 // @route GET /api/transactions/outbox/:user_id
 // @access Private
 export const getUserOutboxTransactions = async (req, res, next) => {
-    const { user_id } = req.params;
+    const { user_id } = req.userId;
     try {
         const query = `
             SELECT *

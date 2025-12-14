@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اختبار إشعارات المعاملات</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; background-color: #f4f4f9; }
+        .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2 { color: #333; }
+        input { width: 70%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background-color: #218838; }
+        #status { font-weight: bold; margin-bottom: 15px; display: block; }
+        .status-connected { color: green; }
+        .status-disconnected { color: red; }
+        ul { list-style-type: none; padding: 0; }
+        li { background: #e9ecef; margin: 5px 0; padding: 10px; border-right: 4px solid #007bff; border-radius: 4px; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>📡 اختبار استقبال الإشعارات (Socket.IO)</h2>
+    
+    <label for="tokenInput">ضع التوكن (JWT) للمستقبل هنا:</label><br>
+    <input type="text" id="tokenInput" placeholder="Bear token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+    <button onclick="connectSocket()">اتصال بالسيرفر</button>
+
+    <span id="status" class="status-disconnected">الحالة: غير متصل</span>
+
+    <h3>سجل الإشعارات:</h3>
+    <ul id="messages"></ul>
+</div>
+
+<script>
+    let socket;
+
+    function connectSocket() {
+        const token = document.getElementById('tokenInput').value.trim();
+
+        if (!token) {
+            alert("يرجى إدخال التوكن أولاً!");
+            return;
+        }
+
+        // لو كان فيه اتصال قديم، نقفله الأول
+        if (socket) {
+            socket.disconnect();
+        }
+
+        // 1. الاتصال بالسيرفر مع إرسال التوكن في الـ auth
+        // ملاحظة: تأكد ان البورت هو 5000 زي ما هو في server.js
+        socket = io("http://localhost:5000", {
+            auth: {
+                token: token // هذا المفتاح هو اللي الـ middleware في server.js بيدور عليه
+            }
+        });
+
+        const statusEl = document.getElementById('status');
+        const listEl = document.getElementById('messages');
+
+        // 2. عند نجاح الاتصال
+        socket.on("connect", () => {
+            statusEl.innerText = `✅ متصل (Socket ID: ${socket.id})`;
+            statusEl.className = "status-connected";
+            console.log("Connected to server");
+            
+            // في الكود الجديد بتاعك، السيرفر بيعمل Join للغرفة تلقائي
+            // بناء على التوكن، فمش محتاجين نبعت emit('join_room') يدوياً
+        });
+
+        // 3. استقبال الإشعار (نفس الاسم اللي في transactionData.js)
+        socket.on("new_notification", (data) => {
+            console.log("New Notification:", data);
+            
+            const li = document.createElement("li");
+            li.innerHTML = `
+                <strong>🔔 إشعار جديد!</strong><br>
+                <span>${data.message}</span> <br>
+                <small>Trans ID: ${data.transactionId} | Notification ID: ${data.id}</small>
+            `;
+            listEl.prepend(li); // إضافة في الأعلى
+            
+            // تشغيل صوت تنبيه بسيط (اختياري)
+            playNotificationSound();
+        });
+
+        // 4. التعامل مع أخطاء الاتصال (مثل التوكن خطأ)
+        socket.on("connect_error", (err) => {
+            statusEl.innerText = `❌ خطأ في الاتصال: ${err.message}`;
+            statusEl.className = "status-disconnected";
+            console.error("Connection Error:", err.message);
+            alert("فشل الاتصال: " + err.message);
+        });
+
+        socket.on("disconnect", () => {
+            statusEl.innerText = "🔌 تم قطع الاتصال";
+            statusEl.className = "status-disconnected";
+        });
+    }
+
+    function playNotificationSound() {
+        // نغمة بسيطة باستخدام AudioContext لو متاح، أو ممكن تلغيها
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.1);
+    }
+</script>
+
+</body>
+</html>

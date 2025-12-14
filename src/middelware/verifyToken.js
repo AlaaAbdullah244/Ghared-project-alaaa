@@ -20,6 +20,9 @@ export const verifyToken = (req, res, next) => {
         req.currentUser = decoded;
 
         req.userId = decoded.id;
+        req.currentUserRole = decoded.role.role_level;
+
+
         next();
     } catch (err) {
         console.log("❌ Token Error:", err.message);

@@ -113,7 +113,6 @@ export const login = asyncWrapper(async (req, res, next) => {
   const user = findUser[0];
   const matchedPassword = await bcrypt.compare(password, user.password_hash);
 
-  // console.log(user);
 
 
   if (user.is_first_login) {
@@ -138,11 +137,12 @@ export const login = asyncWrapper(async (req, res, next) => {
 
   // 5️⃣ جلب كل الأدوار المرتبطة بالمستخدم
   const userRoles = await User.getUserRoles(user.user_id);
-  const role = userRoles[0] || null;
-  const roleLevel = userRoles[0]?.["role_level"] || null;
+
+  const role = userRoles[0] ;
+  const roleLevel = userRoles[0];
   const profilePicture = user.profile_picture
   const fullName = user.full_name
-  const token = await generateJWT({ email: user.email, id: user.user_id, role: roleLevel, roleName :role });
+  const token = await generateJWT({ email: user.email, id: user.user_id, role:roleLevel, roleName :role });
 
   // 6️⃣ لو عنده أكثر من دور
   if (userRoles.length > 1) {

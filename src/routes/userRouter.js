@@ -30,7 +30,7 @@ const router = express.Router();
 const diskStorage = multer.diskStorage({
     destination: function(req, file, cb) {
         // يجب استخدام المسار الكامل
-        cb(null, path.join(__dirname, '../uploads'))
+        cb(null, path.join(__dirname, '../uploads/Images'))
     },
     filename: function(req, file, cb) {
         const ext = file.mimetype.split('/')[1]
