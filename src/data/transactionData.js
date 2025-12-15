@@ -79,6 +79,36 @@ export const getUserDepartmentId = async (userId) => {
     return result.rows[0];
 };
 
+// 4. البريد الوارد (المعاملات الواردة التي لم يتم الرد عليها بعد من هذا المستخدم)
+export const getUserInboxTransactions = async (userId) => {
+    const query = `
+        SELECT 
+            T.transaction_id,
+            T.code,
+            T.subject,
+            T.date,
+            U.full_name AS sender_name
+        FROM "Transaction" T
+        JOIN "Transaction_Receiver" TR 
+            ON T.transaction_id = TR.transaction_id
+        LEFT JOIN "User" U 
+            ON T.sender_user_id = U.user_id
+        WHERE 
+            TR.receiver_user_id = $1
+            AND T.is_draft = false
+            -- لم يقم هذا المستخدم بأي إجراء مسجل على هذه المعاملة بعد
+            AND NOT EXISTS (
+                SELECT 1 FROM "Action" A
+                WHERE 
+                    A.transaction_id = T.transaction_id
+                    AND A.performer_user_id = $1
+            )
+        ORDER BY T.date DESC;
+    `;
+    const result = await pool.query(query, [userId]);
+    return result.rows;
+};
+
 // 8. إدخال المعاملة (Insert Transaction)
 export const insertTransaction = async (client, data) => {
     const query = `
@@ -99,6 +129,34 @@ export const insertTransaction = async (client, data) => {
         data.code
     ]);
     return result.rows[0].transaction_id;
+};
+
+// 8.1 إدخال إجراء جديد على معاملة (Action)
+export const insertAction = async (client, data) => {
+    const query = `
+        INSERT INTO "Action" 
+        (action_name, execution_date, annotation, transaction_id, performer_user_id, target_department_id)
+        VALUES ($1, NOW(), $2, $3, $4, $5)
+        RETURNING action_id;
+    `;
+    const result = await client.query(query, [
+        data.action_name,
+        data.annotation || null,
+        data.transaction_id,
+        data.performer_user_id,
+        data.target_department_id || null
+    ]);
+    return result.rows[0].action_id;
+};
+
+// 8.2 تحديث حالة المعاملة
+export const updateTransactionStatus = async (client, transId, newStatus) => {
+    const query = `
+        UPDATE "Transaction"
+        SET current_status = $2
+        WHERE transaction_id = $1
+    `;
+    await client.query(query, [transId, newStatus]);
 };
 
 // 9. تسجيل المسار
@@ -171,6 +229,19 @@ export const createAndEmitNotification = async (client, notifData, io) => {
             date: new Date()
         });
     }
+};
+
+// 10.1 جلب المستخدمين في قسم معيّن (لاستخدامها في الإحالة)
+export const getUsersByDepartmentId = async (client, departmentId) => {
+    const query = `
+        SELECT U.user_id
+        FROM "User" U
+        JOIN "User_Membership" UM ON U.user_id = UM.user_id
+        JOIN "Department_Role" DR ON UM.dep_role_id = DR.dep_role_id
+        WHERE DR.department_id = $1
+    `;
+    const result = await client.query(query, [departmentId]);
+    return result.rows.map(r => r.user_id);
 };
 
 
