@@ -120,7 +120,7 @@ export const login = asyncWrapper(async (req, res, next) => {
       const error = appError.create("كلمة المرور غير صحيحة", 400, httpStatusText.FAIL);
       return next(error);
     }
-    const token = await generateJWT({  id: user.user_id});
+    const token = await generateJWT({  id: user.user_id });
     return res.status(200).json({
       message: "تسجيل الدخول الأول - يرجى تحديث الملف الشخصي",
       data :{token},
@@ -156,7 +156,9 @@ export const login = asyncWrapper(async (req, res, next) => {
     });
   }
 
+
   // 7️⃣ إذا عنده دور واحد فقط
+
   return res.json({
     status: httpStatusText.SUCCESS,
     data: {

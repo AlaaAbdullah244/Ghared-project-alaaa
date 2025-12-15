@@ -89,6 +89,7 @@ import { pool } from "./config/db.js";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
+// في ملف server.js
 
 const PORT = process.env.PORT || 5000;
 
@@ -127,15 +128,47 @@ io.use((socket, next) => {
 });
 
 // Handle new Socket.IO connections
+// io.on("connection", (socket) => {
+//     console.log(`🔌 Socket connected: ${socket.id}`);
+
+//     // If authentication was successful, the socket will have a userId
+//     if (socket.userId) {
+//         const userRoom = `user_${socket.userId}`;
+//         socket.join(userRoom);
+//         console.log(`✅ User ${socket.userId} with socket ${socket.id} joined room: ${userRoom}`);
+//     }
+
+//     socket.on("disconnect", () => {
+//         console.log(`🔌 Socket disconnected: ${socket.id}`);
+//     });
+// });
+
+// التعامل مع اتصالات Socket.IO الجديدة
 io.on("connection", (socket) => {
     console.log(`🔌 Socket connected: ${socket.id}`);
 
-    // If authentication was successful, the socket will have a userId
+    // إذا كان التوثيق ناجحاً، سيكون لدى السوكيت userId
     if (socket.userId) {
         const userRoom = `user_${socket.userId}`;
         socket.join(userRoom);
         console.log(`✅ User ${socket.userId} with socket ${socket.id} joined room: ${userRoom}`);
     }
+
+    // --- أضف هذا الجزء هنا ---
+    // التعامل مع طلب تسجيل الخروج
+    socket.on("logout", () => {
+        console.log(`👋 User ${socket.userId} logging out...`);
+        
+        // اختياري: مغادرة الغرفة الخاصة بالمستخدم
+        if (socket.userId) {
+            const userRoom = `user_${socket.userId}`;
+            socket.leave(userRoom);
+        }
+
+        // قطع الاتصال بشكل إجباري
+        socket.disconnect(true); 
+    });
+    // ------------------------
 
     socket.on("disconnect", () => {
         console.log(`🔌 Socket disconnected: ${socket.id}`);

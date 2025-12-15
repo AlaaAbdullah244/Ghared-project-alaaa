@@ -9,7 +9,7 @@ export const allowedTo = (...roles) => {
         }
 
         // مقارنة الصلاحيات
-        if(!roles.includes(req.currentUser.roleLevel)) {
+        if(!roles.includes(req.currentUser.role)) {
             return next(appError.create('ليس لديك الصلاحية لإضافة مسؤول', 403)); // 403 أنسب للصلاحيات
         }
         next();

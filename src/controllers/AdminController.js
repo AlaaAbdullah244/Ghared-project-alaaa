@@ -58,7 +58,7 @@ export const AdminLogin = asyncWrapper(async (req, res, next) => {
   const token = await generateJWT({ 
       email: admin.email, 
       id: admin.id || admin.user_id, 
-      roleLevel: admin.roleLevel, 
+      role: admin.roleLevel, 
       roleName: admin.roleName 
   });
 

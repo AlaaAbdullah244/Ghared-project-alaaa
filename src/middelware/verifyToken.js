@@ -18,9 +18,14 @@ export const verifyToken = (req, res, next) => {
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         req.currentUser = decoded;
+        if (decoded.role && decoded.role.role_level){
+            req.currentUserRole = decoded.role.role_level;
+
+
+        }
+    
 
         req.userId = decoded.id;
-        req.currentUserRole = decoded.role.role_level;
 
 
         next();
