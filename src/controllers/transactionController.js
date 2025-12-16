@@ -374,7 +374,7 @@ export const performTransactionAction = asyncWrapper(async (req, res, next) => {
     return next(error);
   }
 
-  // جلب بيانات أساسية للمعاملة (بما فيها sender_user_id)
+  // جلب بيانات أساسية للمعاملة
   const transactionInfo = await TransData.getTransactionDetailsById(transId);
   if (!transactionInfo) {
     const error = appError.create(
@@ -385,10 +385,11 @@ export const performTransactionAction = asyncWrapper(async (req, res, next) => {
     return next(error);
   }
 
-  // جلب sender_user_id من المعاملة (للاستخدام في بعض الإجراءات)
-  const senderUserIdQuery = `SELECT sender_user_id FROM "Transaction" WHERE transaction_id = $1`;
+  // جلب بيانات إضافية من جدول Transaction (sender_user_id, type_id) للاستخدام في بعض الإجراءات
+  const senderUserIdQuery = `SELECT sender_user_id, type_id FROM "Transaction" WHERE transaction_id = $1`;
   const senderResult = await pool.query(senderUserIdQuery, [transId]);
   const senderUserId = senderResult.rows[0]?.sender_user_id;
+  const originalTypeId = senderResult.rows[0]?.type_id;
 
   const client = await pool.connect();
   const io = req.app.get("io");
@@ -500,7 +501,7 @@ export const performTransactionAction = asyncWrapper(async (req, res, next) => {
         shouldArchive = true;
         break;
 
-      // --- حالة 7: إحالة (نقل لقسم آخر) ---
+      // --- حالة 7: إحالة (نقل لقسم آخر بإنشاء معاملة جديدة) ---
       case "إحالة":
         if (!target_department_id) {
           const error = appError.create(
@@ -510,21 +511,37 @@ export const performTransactionAction = asyncWrapper(async (req, res, next) => {
           );
           throw error;
         }
+        // المعاملة الأصلية يتم وسمها كمحالة (منتهية عند هذا القسم)
         newStatus = "محالة";
 
         // قسم المستخدم الحالي (من قسم)
         const fromDepData = await TransData.getUserDepartmentId(userId);
         const fromDepId = fromDepData ? fromDepData.department_id : null;
 
-        // أ) تسجيل مسار جديد للمعاملة
+        // 1) إنشاء معاملة جديدة child تمثل المرحلة المحال إليها
+        const childCode = `TR-${Date.now()}`;
+        const childStatus = "محالة واردة";
+
+        const childTransId = await TransData.insertTransaction(client, {
+          subject: transactionInfo.subject,
+          content: transactionInfo.content,
+          type_id: originalTypeId,
+          sender_id: userId, // المحيل هو المرسل في المرحلة الجديدة
+          parent_id: transId, // ربط المعاملة الجديدة بالأصل
+          is_draft: false,
+          current_state: childStatus,
+          code: childCode,
+        });
+
+        // 2) تسجيل مسار جديد مرتبط بالمعاملة الجديدة
         await TransData.insertTransactionPath(client, {
-          transId,
+          transId: childTransId,
           fromDeptId: fromDepId,
           toDeptId: target_department_id,
           notes: annotation || "إحالة معاملة",
         });
 
-        // ب) جلب كل المستخدمين في الجهة المحال إليها
+        // 3) جلب كل المستخدمين في الجهة المحال إليها
         const targetUsers = await TransData.getUsersByDepartmentId(
           client,
           target_department_id
@@ -537,15 +554,15 @@ export const performTransactionAction = asyncWrapper(async (req, res, next) => {
           : "";
 
         for (const receiverId of targetUsers) {
-          // إضافة كمستلمين جدد
-          await TransData.insertReceiver(client, transId, receiverId);
+          // إضافة كمستلمين جدد على المعاملة الجديدة
+          await TransData.insertReceiver(client, childTransId, receiverId);
 
-          // إرسال إشعار لهم (لو فيه سوكيت)
+          // إرسال إشعار لهم (لو فيه سوكيت) على المعاملة الجديدة
           await TransData.createAndEmitNotification(
             client,
             {
               userId: receiverId,
-              transId: transId,
+              transId: childTransId,
               senderName,
               subject: transactionInfo.subject,
               snippet,
@@ -559,24 +576,8 @@ export const performTransactionAction = asyncWrapper(async (req, res, next) => {
         newStatus = "قيد المعالجة";
     }
 
-    // 3) تحديث حالة المعاملة
+    // 3) تحديث حالة المعاملة فقط (بدون أرشفة في جدول Draft حالياً)
     await TransData.updateTransactionStatus(client, transId, newStatus);
-
-    // 4) الأرشفة (لو مطلوبة) - نستخدم Draft table للأرشفة
-    if (shouldArchive) {
-      // نتحقق أولاً إن المعاملة مش محفوظة كمسودة أصلاً
-      const checkDraftQuery = `SELECT draft_id FROM "Draft" WHERE transaction_id = $1`;
-      const draftCheck = await client.query(checkDraftQuery, [transId]);
-
-      if (draftCheck.rows.length === 0) {
-        // نحفظها كمسودة (أرشفة)
-        const archiveQuery = `
-          INSERT INTO "Draft" (transaction_id, archived_by_user_id, archive_date)
-          VALUES ($1, $2, NOW())
-        `;
-        await client.query(archiveQuery, [transId, userId]);
-      }
-    }
 
     await client.query("COMMIT");
 
